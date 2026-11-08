@@ -1,0 +1,13 @@
+[package]
+name = "ableton-link"
+version = "0.1.0"
+edition = "2021"
+description = "FFI wrapper for the vendored Ableton Link C++ SDK (header-only v4)"
+links = "ableton_link_bridge"
+
+[features]
+# CI / cross-compile mode: compiles an empty crate.
+stub = []
+
+[build-dependencies]
+cc = "1"

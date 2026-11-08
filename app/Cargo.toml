@@ -1,0 +1,33 @@
+[package]
+name = "bpmdetector"
+version = "0.2.0"
+description = "Minimal real-time BPM detector with Ableton Link and MIDI Clock"
+edition = "2021"
+
+[lib]
+name = "bpmdetector"
+path = "src/lib.rs"
+
+[[bin]]
+name = "bpmdetector"
+path = "src/main.rs"
+
+[dependencies]
+cpal = "0.15"
+aubio-rs = { version = "0.2", features = ["bindgen"] }
+midir = "0.10"
+eframe = { version = "0.33", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }
+rtrb = "0.3"          # lock-free ring buffer: audio callback -> UI thread
+env_logger = "0.11"
+log = "0.4"
+
+# Ableton Link: vendored SDK wrapper (header-only, compiled via build.rs)
+ableton-link = { path = "link" }
+
+[dev-dependencies]
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
