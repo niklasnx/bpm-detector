@@ -8,7 +8,7 @@ Minimal real-time BPM detector. One small binary for **macOS, Windows and Linux*
 ## Features
 
 - **Real-time BPM detection** via [aubio](https://aubio.org) (SpecFlux onset + beat tracking), sample-accurate beat timing, half/double tempo folding, median smoothing and outlier rejection
-- **Fast tempo tracking** — adopts pitch-fader tempo changes within ~2 beats
+- **Fast tempo tracking** — follows pitch-fader changes within a few beats
 - **Beat LED** — flashes on the actual audible transient (kick/snare), sample-accurate, not on the smoothed number
 - **Auto gain** — keeps the input level in the sweet spot automatically (on by default)
 - **Audio device & channel selection**, input gain (-24…+24 dB) and level meter
@@ -23,7 +23,6 @@ Minimal real-time BPM detector. One small binary for **macOS, Windows and Linux*
 - **C/C++** — only dependencies: the vendored Ableton Link SDK (header-only
   C++), a small C bridge to it, and [aubio](https://aubio.org) (C), which is
   compiled from source for onset/beat detection
-- **JavaScript** — none
 
 ## Download
 
