@@ -2,7 +2,6 @@
 
 Minimal real-time BPM detector. Pure Rust, one small binary for **macOS, Windows and Linux** (including Raspberry Pi).
 
-Born from [this r/DJs thread](https://www.reddit.com/r/DJs/comments/1ldp77l/does_this_exist_a_minimal_macos_or_ios/).
 
 ![Screenshot](docs/screenshot.png)
 
@@ -27,7 +26,10 @@ cargo build --release
 # binary: app/target/release/bpmdetector
 ```
 
-On Linux you need aubio and a C++ toolchain: `sudo apt install libaubio-dev g++` (or build aubio from source on Raspberry Pi).
+On Linux you need ALSA/UDev headers, a C++ toolchain and libclang (used by
+bindgen): `sudo apt install libasound2-dev libudev-dev g++ clang libclang-dev`.
+On macOS the Xcode Command Line Tools are sufficient. On Windows, LLVM must be
+installed (the GitHub Actions runners include it).
 
 ## Usage
 
@@ -37,13 +39,12 @@ On Linux you need aubio and a C++ toolchain: `sudo apt install libaubio-dev g++`
 
 The beat LED in the top-right corner flashes on the detected beat of the incoming signal.
 
-### QLC+ (lighting)
+### MIDI Beat Clock
 
-QLC+ consumes MIDI Beat Clock directly (channel 531 = beat, [docs](https://www.qlcplus.org/old/docs/html_en_EN/midiplugin.html)):
-
-1. Start the detector, enable MIDI Clock
-2. Connect the MIDI port (physical or ALSA loopback on Linux)
-3. In QLC+, patch the MIDI plugin as input and map the beat trigger to channel 531
+The MIDI output sends standard MIDI Beat Clock (24 PPQ, `0xF8`), which is
+consumed by DAWs, lighting consoles, video software and hardware sequencers
+alike. Select an output port in the app and enable **MIDI Clock** — the
+receiving application will follow the detected tempo.
 
 ### Ableton Link
 
@@ -65,9 +66,17 @@ cargo test          # detector logic, aubio integration, MIDI clock timing
 cargo run --release # GUI
 ```
 
+Two end-to-end tests need real multicast networking / a virtual MIDI port and
+are ignored by default:
+
+```sh
+cargo test --release --test link -- --ignored
+cargo test --release --test midi_clock_e2e -- --ignored
+```
+
 CI (`.github/workflows/`):
 
-- `ci.yml` — test + build on macOS, Windows, Linux; cross-build for aarch64 Linux (Raspberry Pi)
+- `ci.yml` — test + clippy + build on macOS, Windows, Linux; native aarch64 Linux build (Raspberry Pi)
 - `release.yml` — on tag `v*`: artifacts for macOS (arm64/x64), Linux (x64/arm64), Windows (x64)
 
 ## Layout
@@ -81,8 +90,6 @@ app/
 
 ## License
 
-[MIT](LICENSE)
+[GPL-3.0](LICENSE). The app builds against aubio (GPL-3.0) and the
+Ableton Link SDK (GPL-2.0-or-later), so the combined work is GPL-3.0.
 
----
-
-[Deutsche Version / German version](README.de.md)

@@ -1,6 +1,5 @@
 //! Ableton Link integration: publishes the detected BPM into a live Link
-//! session so Resolume / Ableton / Traktor / QLC+ (via MIDI clock from peers)
-//! can sync to it.
+//! session so DAWs, video software and lighting tools can sync to it.
 
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;

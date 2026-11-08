@@ -22,7 +22,17 @@ const WARMUP_LEN: usize = 3;
 /// How many consecutive consistent intervals force an immediate re-lock when
 /// they differ from the current estimate (pitch-fader responsiveness).
 const SHIFT_CONFIRM: usize = 2;
-
+/// Onsets are the fastest tempo signal: they fire on the audible hit itself.
+/// Keep a short window of onset-derived BPM values.
+const ONSET_WINDOW: usize = 6;
+/// Lower bound for the dynamic onset refractory period. A kick often fires
+/// twice (attack + body) and room reflections add more hits; onsets closer
+/// than ~45% of the current beat period are treated as the same beat.
+const ONSET_MIN_GAP: f64 = 0.15;
+/// Onset tempo values must agree before they are trusted.
+const ONSET_AGREE: usize = 3;
+/// Relative tolerance for agreeing onset tempos.
+const ONSET_TOL: f64 = 0.04;
 /// One detected beat or onset, sent from the audio thread to the UI.
 /// Times are sample-accurate positions from aubio, in seconds.
 #[derive(Debug, Clone, Copy)]
@@ -57,6 +67,15 @@ pub struct BpmDetector {
     shift_candidate: Option<f64>,
     /// True once we have a stable lock (confidence + consistent history).
     locked: bool,
+    /// Time of the last accepted onset (de-duplicates double triggers).
+    last_onset: Option<f64>,
+    /// Time of the most recent event of any kind (beat or onset), used for
+    /// staleness so onset-only tracking does not display "---".
+    last_event: Option<f64>,
+    /// Recent onset-derived BPM candidates (one per accepted interval).
+    onset_bpms: VecDeque<f64>,
+    /// Smoothed onset tempo (fast attack, slow release).
+    onset_smooth: Option<f64>,
 }
 
 impl BpmDetector {
@@ -71,6 +90,10 @@ impl BpmDetector {
             shift_count: 0,
             shift_candidate: None,
             locked: false,
+            last_onset: None,
+            last_event: None,
+            onset_bpms: VecDeque::with_capacity(ONSET_WINDOW),
+            onset_smooth: None,
         }
     }
 
@@ -85,12 +108,86 @@ impl BpmDetector {
     /// Feed one event from the audio thread. Times are sample-accurate beat
     /// positions in seconds (monotonic). Returns a BPM estimate.
     pub fn on_beat(&mut self, _fallback_time: f64, update: BpmUpdate) -> Option<f64> {
-        // Only tracked beats advance interval math; onsets are LED-only
-        // (they double-fire on snares/hi-hats and would poison the median).
-        let BpmUpdate::Beat { bpm_hint, confidence, beat_time } = update else {
-            return self.last_estimate;
+        let t = match update {
+            BpmUpdate::Onset { onset_time } => onset_time,
+            BpmUpdate::Beat { beat_time, .. } => beat_time,
         };
-        self.on_tracked_beat(beat_time, bpm_hint, confidence)
+        self.last_event = Some(t);
+        match update {
+            BpmUpdate::Onset { onset_time } => self.on_onset(onset_time),
+            BpmUpdate::Beat { bpm_hint, confidence, beat_time } => {
+                self.on_tracked_beat(beat_time, bpm_hint, confidence)
+            }
+        }
+    }
+
+    /// Onsets are the fastest tempo signal. aubio's beat tracker follows a
+    /// tempo change only after several seconds, while every audible hit is
+    /// available immediately. Each interval is normalised to the nearest
+    /// multiple of the current beat period, which folds subdivisions and
+    /// rejects room echoes that are off the beat grid.
+    fn on_onset(&mut self, onset_time: f64) -> Option<f64> {
+        let Some(prev) = self.last_onset else {
+            self.last_onset = Some(onset_time);
+            return None;
+        };
+        let dt = onset_time - prev;
+        let est = self.last_estimate.unwrap_or(120.0);
+        let period = 60.0 / est;
+        let min_gap = (0.45 * period).clamp(ONSET_MIN_GAP, 0.30);
+        if dt < min_gap {
+            return None;
+        }
+        self.last_onset = Some(onset_time);
+        if dt > MAX_INTERVAL {
+            self.onset_bpms.clear();
+            return None;
+        }
+
+        // Snap the interval to a whole number of beats, then fold octaves:
+        // this maps eighth/sixteenth notes and echoes back to the pulse.
+        let beats = (dt / period).round().max(1.0);
+        let candidate = fold_to_range(60.0 * beats / dt);
+        if (candidate - est).abs() / est > 0.25 {
+            return None;
+        }
+        self.onset_bpms.push_back(candidate);
+        while self.onset_bpms.len() > ONSET_WINDOW {
+            self.onset_bpms.pop_front();
+        }
+        if self.onset_bpms.len() < ONSET_AGREE {
+            return None;
+        }
+
+        let med = self.median(&self.onset_bpms)?;
+        let agree = self
+            .onset_bpms
+            .iter()
+            .filter(|v| (*v - med).abs() / med < ONSET_TOL)
+            .count();
+        if agree < ONSET_AGREE {
+            return None;
+        }
+
+        // Fast attack, slow release: converges quickly without jitter.
+        let smooth = match self.onset_smooth {
+            Some(prev) => {
+                let alpha = if (med - prev).abs() / prev > 0.02 { 0.6 } else { 0.2 };
+                prev + alpha * (med - prev)
+            }
+            None => med,
+        };
+        self.onset_smooth = Some(smooth);
+
+        let differs = self
+            .last_estimate
+            .map(|e| (smooth - e).abs() / e > 0.005)
+            .unwrap_or(true);
+        if differs {
+            self.last_estimate = Some(smooth);
+            return Some(smooth);
+        }
+        None
     }
 
     fn on_tracked_beat(&mut self, beat_time: f64, bpm_hint: f64, confidence: f64) -> Option<f64> {
@@ -108,7 +205,7 @@ impl BpmDetector {
 
         let Some(last) = self.last_beat else {
             self.last_beat = Some(beat_time);
-            return self.estimate();
+            return self.estimate(beat_time);
         };
 
         let mut interval = beat_time - last;
@@ -119,7 +216,7 @@ impl BpmDetector {
         self.last_beat = Some(beat_time);
 
         if interval < MIN_INTERVAL || interval > MAX_INTERVAL {
-            return self.estimate();
+            return self.estimate(beat_time);
         }
 
         // Half/double + outlier handling relative to the previous interval.
@@ -128,7 +225,7 @@ impl BpmDetector {
                 interval /= 2.0; // missed beat in between
             } else if interval > OUTLIER_FACTOR * prev || interval < prev / OUTLIER_FACTOR {
                 self.prev_interval = Some(interval);
-                return self.estimate();
+                return self.estimate(beat_time);
             }
         }
         self.prev_interval = Some(interval);
@@ -139,16 +236,19 @@ impl BpmDetector {
             self.history.pop_front();
         }
 
-        self.estimate()
+        self.estimate(beat_time)
     }
 
-    /// Combine interval median and aubio hint into a display estimate.
-    /// While the signal is "easy" (steady electronic music), both agree.
-    /// On complex material the hint dominates because it uses beat tracking
-    /// over a longer window.
-    fn estimate(&mut self) -> Option<f64> {
+    /// Combine onset tempo, interval median and aubio hint into a display
+    /// estimate. Onsets react instantly to tempo changes; the hint and
+    /// interval median stabilise the long-term value.
+    fn estimate(&mut self, now: f64) -> Option<f64> {
         let interval_median = self.median(&self.history).map(fold_to_range);
         let hint_median = self.median(&self.hint_history).map(fold_to_range);
+        let onset_fast = self
+            .last_onset
+            .filter(|t| now - t <= STALE_AFTER)
+            .and(self.onset_smooth);
 
         let conf = self.last_confidence;
         self.locked = conf >= LOCK_CONFIDENCE && self.history.len() >= WARMUP_LEN;
@@ -158,8 +258,21 @@ impl BpmDetector {
         // immediately instead of waiting for the whole history to drift over.
         let shift = self.detect_shift();
 
-        let est = match (interval_median, hint_median) {
-            (Some(a), Some(b)) => {
+        let est = match (onset_fast, interval_median, hint_median) {
+            (Some(o), _, Some(b)) => {
+                if let Some(s) = shift {
+                    s
+                } else if (o - b).abs() / o.max(b) < 0.03 {
+                    // Both agree: average for extra stability.
+                    (o + b) / 2.0
+                } else {
+                    // The tracker has not caught up with the audible tempo
+                    // yet — trust the onsets, that is what the user hears.
+                    o
+                }
+            }
+            (Some(o), _, None) => shift.unwrap_or(o),
+            (None, Some(a), Some(b)) => {
                 if let Some(s) = shift {
                     s
                 } else if (a - b).abs() / a.max(b) < 0.02 {
@@ -170,9 +283,9 @@ impl BpmDetector {
                     a
                 }
             }
-            (Some(a), None) => shift.unwrap_or(a),
-            (None, Some(b)) => shift.unwrap_or(b),
-            (None, None) => return self.last_estimate,
+            (None, Some(a), None) => shift.unwrap_or(a),
+            (None, None, Some(b)) => shift.unwrap_or(b),
+            (None, None, None) => return self.last_estimate,
         };
 
         if !(30.0..=250.0).contains(&est) {
@@ -221,14 +334,13 @@ impl BpmDetector {
         if q.is_empty() {
             return None;
         }
-        let mut v: Vec<f64> = q.iter().copied().collect();
-        v.sort_by(|a, b| a.partial_cmp(b).unwrap());
-        Some(v[v.len() / 2])
+        let v: Vec<f64> = q.iter().copied().collect();
+        Some(median_slice(&v))
     }
 
     /// True when no beat has arrived within `STALE_AFTER` seconds.
     pub fn is_stale(&self, now: f64) -> bool {
-        match self.last_beat {
+        match self.last_event {
             Some(t) => now - t > STALE_AFTER,
             None => true,
         }
@@ -237,7 +349,11 @@ impl BpmDetector {
     pub fn reset(&mut self) {
         self.history.clear();
         self.hint_history.clear();
+        self.onset_bpms.clear();
+        self.onset_smooth = None;
+        self.last_event = None;
         self.last_beat = None;
+        self.last_onset = None;
         self.prev_interval = None;
         self.last_estimate = None;
         self.last_confidence = 0.0;
@@ -252,10 +368,19 @@ fn fold_to_range(mut bpm: f64) -> f64 {
     while bpm < 80.0 {
         bpm *= 2.0;
     }
-    while bpm > 180.0 {
+    // Upper bound slightly above 180 so a 180 BPM echo (180.2) is not
+    // mistaken for a 90 BPM half-time value.
+    while bpm > 190.0 {
         bpm /= 2.0;
     }
     bpm
+}
+
+/// Median of a small slice (empty slice -> NaN, callers guard the length).
+fn median_slice(v: &[f64]) -> f64 {
+    let mut s = v.to_vec();
+    s.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    s[s.len() / 2]
 }
 
 impl Default for BpmDetector {
@@ -415,18 +540,48 @@ mod tests {
 
     /// Onsets never poison interval math: they are LED-only and leave the
     /// existing estimate untouched.
+    /// A pitch change is picked up from onsets alone, without waiting for
+    /// aubio's beat tracker to relock.
     #[test]
-    fn onsets_do_not_disturb_estimate() {
+    fn onsets_follow_tempo_shift_fast() {
         let mut det = BpmDetector::new();
-        feed_steady(&mut det, 120.0, 8, 0.0);
-        let before = det.last_estimate;
-        let interval = 60.0 / 128.0; // onsets at a different rate
-        let mut t = 8.0 * (60.0 / 120.0);
-        for _ in 0..10 {
-            let est = det.on_beat(t, BpmUpdate::Onset { onset_time: t });
-            assert_eq!(est, before);
-            t += interval;
+        // Establish 120 BPM from onsets (quarter notes).
+        let mut t = 0.0;
+        for _ in 0..12 {
+            det.on_beat(t, BpmUpdate::Onset { onset_time: t });
+            t += 60.0 / 120.0;
         }
+        assert_bpm(det.last_estimate, 120.0);
+
+        // Pitch up to 135 BPM: the display must move within a few onsets.
+        let interval = 60.0 / 135.0;
+        let mut moved_at = None;
+        for i in 0..10 {
+            let est = det.on_beat(t, BpmUpdate::Onset { onset_time: t });
+            t += interval;
+            if moved_at.is_none() && est.map(|e| (e - 120.0).abs() > 5.0).unwrap_or(false) {
+                moved_at = Some(i);
+            }
+        }
+        assert!(
+            moved_at.map(|i| i <= 4).unwrap_or(false),
+            "display did not move within 4 onsets: {moved_at:?}"
+        );
+        let est = det.last_estimate.expect("estimate");
+        assert!((est - 135.0).abs() < 2.0, "expected ~135, got {est}");
+    }
+
+    /// Eighth/sixteenth-note subdivisions fold back onto the base tempo.
+    #[test]
+    fn onset_subdivisions_fold() {
+        let mut det = BpmDetector::new();
+        let mut t = 0.0;
+        // 16th notes at 128 BPM = 7.5 onsets/s.
+        for _ in 0..20 {
+            det.on_beat(t, BpmUpdate::Onset { onset_time: t });
+            t += 60.0 / 128.0 / 4.0;
+        }
+        assert_bpm(det.last_estimate, 128.0);
     }
 
     #[test]
@@ -463,5 +618,27 @@ mod tests {
         let mut det2 = BpmDetector::new();
         let _ = feed_steady(&mut det2, 120.0, 5, 0.0);
         assert!(det2.is_locked(), "0.9 confidence should lock");
+    }
+
+    /// Room reflections add a second onset per beat, producing an
+    /// alternating 135/180 pattern. The cluster logic must still pick 135.
+    #[test]
+    fn onset_reflections_do_not_break_tempo() {
+        let mut det = BpmDetector::new();
+        // Establish 120 BPM (quarter notes).
+        let mut t = 0.0;
+        for _ in 0..12 {
+            det.on_beat(t, BpmUpdate::Onset { onset_time: t });
+            t += 0.5;
+        }
+        // 135 BPM with an echo 333 ms after each hit.
+        let beat = 60.0 / 135.0;
+        for _ in 0..20 {
+            det.on_beat(t, BpmUpdate::Onset { onset_time: t });
+            det.on_beat(t + 0.333, BpmUpdate::Onset { onset_time: t + 0.333 });
+            t += beat;
+        }
+        let est = det.last_estimate.expect("estimate");
+        assert!((est - 135.0).abs() < 2.0, "expected ~135, got {est}");
     }
 }

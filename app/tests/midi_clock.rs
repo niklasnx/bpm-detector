@@ -1,6 +1,5 @@
 //! MIDI Clock verification: run the drift-compensated scheduler at a fixed
-//! BPM and count ticks. Also documents the QLC+ mapping
-//! (channel 530/531/532 = start/beat/stop).
+//! BPM and count ticks, and pins the MIDI Beat Clock byte contract.
 
 use std::time::{Duration, Instant};
 
@@ -77,25 +76,21 @@ fn midi_clock_tick_spacing_is_stable() {
     );
 }
 
-/// QLC+ receives our clock as MIDI Beat Clock. QLC+ maps:
-///   ch 530 = start/continue, ch 531 = beat (this is the BPM pulse),
-///   ch 532 = stop.
-/// We only ever send 0xF8 (beat/clock) — exactly what QLC+'s MIDI input
-/// plugin expects on channel 531. This test pins that contract.
+/// The clock source sends only 0xF8 (timing clock) — the standard byte that
+/// MIDI Beat Clock consumers expect for the tempo pulse. This test pins the
+/// contract so a refactor cannot silently switch to a different message.
 #[test]
-fn qlcplus_midi_beat_clock_contract() {
-    const MIDI_CLOCK: u8 = 0xF8; // 248: timing clock, QLC+ ch 531
-    const MIDI_START: u8 = 0xFA; // 250: QLC+ ch 530
-    const MIDI_STOP: u8 = 0xFC; // 252: QLC+ ch 532
+fn midi_beat_clock_contract() {
+    const MIDI_CLOCK: u8 = 0xF8; // 248: timing clock
+    const MIDI_START: u8 = 0xFA; // 250: start
+    const MIDI_STOP: u8 = 0xFC; // 252: stop
 
     // Our scheduler sends only 0xF8 per tick — verify the byte is correct
     let tick_byte = 0xF8u8;
     assert_eq!(tick_byte, MIDI_CLOCK);
 
-    // Sanity: the QLC+ channel mapping document says beat = 531. The mapping
-    // is (message_byte - 0xF8) + 531 for clock-family messages... actually
-    // QLC+ counts *clock pulses* as channel 531 events; the byte itself must
-    // be 0xF8. This assertion guards against accidental use of 0xF9 etc.
+    // Guard against accidental use of MIDI Time Code (0xF9) or other
+    // clock-family messages instead of the Beat Clock pulse.
     assert_ne!(tick_byte, MIDI_START);
     assert_ne!(tick_byte, MIDI_STOP);
 }

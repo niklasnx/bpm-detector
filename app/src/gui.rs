@@ -149,7 +149,6 @@ impl eframe::App for App {
         // 1. Drain beat updates from the audio thread. All times (beat,
         //    onset, staleness) live in the aubio sample clock, which runs
         //    monotonic from stream start — independent of UI repaint jitter.
-        self.last_beat_at = None;
         let mut latest_event_time = self.detector_time;
         {
             let mut cons = self.updates.lock().unwrap();

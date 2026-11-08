@@ -11,7 +11,7 @@ use aubio_rs::Tempo;
 
 const SAMPLE_RATE: u32 = 44100;
 const WIN: usize = 1024;
-const HOP: usize = 512;
+const HOP: usize = 256;
 
 /// Generate a click track: filtered kick-like bursts every beat.
 fn click_track(bpm: f64, seconds: f64) -> Vec<f32> {
@@ -43,8 +43,8 @@ fn aubio_detects_synth_clicks_120bpm() {
     let mut beat_times: Vec<f64> = Vec::new();
     let mut clock = 0.0f64;
 
-    for chunk in samples.chunks(HOP) {
-        clock += chunk.len() as f64 / SAMPLE_RATE as f64;
+    for chunk in samples.chunks(HOP).take(samples.len() / HOP) {
+        clock += HOP as f64 / SAMPLE_RATE as f64;
         if let Ok(r) = tempo.do_result(chunk) {
             if r > 0.5 {
                 if let Some(bpm) = det.on_beat(clock, BpmUpdate::Beat { bpm_hint: tempo.get_bpm() as f64, confidence: tempo.get_confidence() as f64, beat_time: clock }) {
@@ -76,8 +76,8 @@ fn aubio_detects_synth_clicks_98bpm() {
     let mut final_bpm = None;
     let mut clock = 0.0f64;
 
-    for chunk in samples.chunks(HOP) {
-        clock += chunk.len() as f64 / SAMPLE_RATE as f64;
+    for chunk in samples.chunks(HOP).take(samples.len() / HOP) {
+        clock += HOP as f64 / SAMPLE_RATE as f64;
         if let Ok(r) = tempo.do_result(chunk) {
             if r > 0.5 {
                 if let Some(bpm) = det.on_beat(clock, BpmUpdate::Beat { bpm_hint: tempo.get_bpm() as f64, confidence: tempo.get_confidence() as f64, beat_time: clock }) {
@@ -103,8 +103,8 @@ fn silence_produces_no_estimates() {
     let mut det = BpmDetector::new();
     let mut clock = 0.0f64;
     let mut got_beat = false;
-    for chunk in silence.chunks(HOP) {
-        clock += chunk.len() as f64 / SAMPLE_RATE as f64;
+    for chunk in silence.chunks(HOP).take(silence.len() / HOP) {
+        clock += HOP as f64 / SAMPLE_RATE as f64;
         if let Ok(r) = tempo.do_result(chunk) {
             if r > 0.5 {
                 got_beat = true;

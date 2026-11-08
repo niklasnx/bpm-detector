@@ -1,10 +1,12 @@
 // C bridge for Ableton Link (header-only SDK v4.x)
 // Exposes exactly what the BPM detector needs: enable, tempo, peers.
 
-#include <ableton/Link.hpp>
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <mutex>
+
+#include <ableton/Link.hpp>
 
 namespace {
 
