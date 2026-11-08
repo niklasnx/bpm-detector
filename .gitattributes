@@ -1,0 +1,3 @@
+# Vendored third-party SDKs should not skew the language statistics.
+app/link/include/** linguist-vendored
+app/link/asio-include/** linguist-vendored

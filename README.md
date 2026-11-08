@@ -1,6 +1,6 @@
 # BPM Detector
 
-Minimal real-time BPM detector. Pure Rust, one small binary for **macOS, Windows and Linux** (including Raspberry Pi).
+Minimal real-time BPM detector. One small binary for **macOS, Windows and Linux** (including Raspberry Pi).
 
 
 ![Screenshot](docs/screenshot.png)
@@ -14,7 +14,16 @@ Minimal real-time BPM detector. Pure Rust, one small binary for **macOS, Windows
 - **Audio device & channel selection**, input gain (-24…+24 dB) and level meter
 - **MIDI Beat Clock** output (24 PPQ, drift-compensated)
 - **Ableton Link** — share the detected tempo with Ableton, Resolume, Traktor, …
-- Native GUI ([egui](https://www.egui.rs)), no JS runtime, ~5 MB binary
+- Native GUI ([egui](https://www.egui.rs)), ~5 MB binary
+
+### Languages
+
+- **Rust** — everything the user interacts with: GUI, audio capture, BPM
+  logic, MIDI clock, and the Link wrapper
+- **C/C++** — only dependencies: the vendored Ableton Link SDK (header-only
+  C++), a small C bridge to it, and [aubio](https://aubio.org) (C), which is
+  compiled from source for onset/beat detection
+- **JavaScript** — none
 
 ## Download
 

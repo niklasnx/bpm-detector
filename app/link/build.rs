@@ -60,10 +60,13 @@ fn main() {
 
     build.compile("ableton_link_bridge");
 
-    // Propagate linker flags: C++ standard library + platform deps
+    // Propagate linker flags: C++ standard library + platform deps.
+    // MSVC links its C++ runtime automatically; only MinGW needs libstdc++.
     if target_os == "macos" {
         println!("cargo:rustc-link-lib=c++");
-    } else {
+    } else if target_os == "windows" && target_env != "msvc" {
+        println!("cargo:rustc-link-lib=stdc++");
+    } else if target_os != "windows" {
         println!("cargo:rustc-link-lib=stdc++");
     }
     if target_os == "linux" {

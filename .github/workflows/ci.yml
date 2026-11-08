@@ -36,6 +36,8 @@ jobs:
           }
 
       - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app
 
       - name: Unit + integration tests
         working-directory: app
@@ -73,6 +75,8 @@ jobs:
             libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
             libxkbcommon-dev libssl-dev patchelf clang libclang-dev
       - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app
       - name: Build for aarch64 Linux
         working-directory: app
         run: cargo build --release
