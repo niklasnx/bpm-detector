@@ -1,3 +1,5 @@
+#![cfg(unix)]
+
 //! End-to-end MIDI Beat Clock test: create a virtual MIDI input, send the
 //! clock to it through the real midir path, and count 0xF8 bytes.
 //!
@@ -11,7 +13,6 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use bpmdetector::midi::MidiClock;
-#[cfg(unix)]
 use midir::os::unix::VirtualInput;
 
 #[test]
